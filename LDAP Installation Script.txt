@@ -1,0 +1,184 @@
+===================================================================================
+ Add 2 VM in NAT Mode , 1st VM- Master & 2nd VM- Client
+===================================================================================
+
+====================================
+ On VM- Master
+====================================
+ OpenLDAP : Configure LDAP Server
+====================================
+
+[root@localhost ~]# hostnamectl set-hostname master
+[root@localhost ~]# systemctl stop firewalld
+[root@localhost ~]# systemctl disable firewalld
+[root@localhost ~]# vim /etc/selinux/config
+                    ------------------------
+                         selinux=disabled
+                    ------------------------
+                          ADD THIS LINE 
+                    ------------------------
+[root@localhost ~]# vi /etc/hosts
+                    -------------------------------
+                    192.168.235.136 master
+			  192.168.235.137 client
+                    -------------------------------
+[root@localhost ~]# ping client
+-----------------------------------------------------------------------------------------
+
+[root@master ~]# yum -y install openldap-servers openldap-clients
+[root@master ~]# cp /usr/share/openldap-servers/DB_CONFIG.example /var/lib/ldap/DB_CONFIG
+[root@master ~]# chown ldap. /var/lib/ldap/DB_CONFIG
+[root@master ~]# systemctl start slapd
+[root@master ~]# systemctl enable slapd
+[root@master ~]# systemctl status slapd
+[root@master ~]# slappasswd
+			----------------------------------------
+			{SSHA}P0OzwYC7JFOpwoHJPvoV0NR+rkvhuFXj
+			----------------------------------------
+[root@master ~]# vi chrootpw.ldif
+---------------------------------------------------
+dn: olcDatabase={0}config,cn=config
+changetype: modify
+add: olcRootPW
+olcRootPW:{SSHA}P0OzwYC7JFOpwoHJPvoV0NR+rkvhuFXj
+---------------------------------------------------
+
+[root@master ~]# ldapadd -Y EXTERNAL -H ldapi:/// -f chrootpw.ldif
+[root@master ~]# ldapadd -Y EXTERNAL -H ldapi:/// -f /etc/openldap/schema/cosine.ldif
+[root@master ~]# ldapadd -Y EXTERNAL -H ldapi:/// -f /etc/openldap/schema/nis.ldif
+[root@master ~]# ldapadd -Y EXTERNAL -H ldapi:/// -f /etc/openldap/schema/inetorgperson.ldif
+[root@master ~]# vi chdomain.ldif
+---------------------------------------------------------------------------------------
+dn: olcDatabase={1}monitor,cn=config
+changetype: modify
+replace: olcAccess
+olcAccess: {0}to * by dn.base="gidNumber=0+uidNumber=0,cn=peercred,cn=external,cn=auth"
+  read by dn.base="cn=Manager,dc=cdac,dc=in" read by * none
+
+dn: olcDatabase={2}hdb,cn=config
+changetype: modify
+replace: olcSuffix
+olcSuffix: dc=cdac,dc=in
+
+dn: olcDatabase={2}hdb,cn=config
+changetype: modify
+replace: olcRootDN
+olcRootDN: cn=Manager,dc=cdac,dc=in
+
+dn: olcDatabase={2}hdb,cn=config
+changetype: modify
+add: olcRootPW
+olcRootPW: {SSHA}P0OzwYC7JFOpwoHJPvoV0NR+rkvhuFXj
+
+dn: olcDatabase={2}hdb,cn=config
+changetype: modify
+add: olcAccess
+olcAccess: {0}to attrs=userPassword,shadowLastChange by
+  dn="cn=Manager,dc=cdac,dc=in" write by anonymous auth by self write by * none
+olcAccess: {1}to dn.base="" by * read
+olcAccess: {2}to * by dn="cn=Manager,dc=cdac,dc=in" write by * read                                                                     
+----------------------------------------------------------------------------------
+
+[root@master ~]# ldapmodify -Y EXTERNAL -H ldapi:/// -f chdomain.ldif
+[root@master ~]# vi basedomain.ldif
+--------------------------------------------------
+dn: dc=cdac,dc=in
+objectClass: top
+objectClass: dcObject
+objectclass: organization
+o: cdac in
+dc: cdac
+
+dn: cn=Manager,dc=cdac,dc=in
+objectClass: organizationalRole
+cn: Manager
+description: Directory Manager
+
+dn: ou=People,dc=cdac,dc=in
+objectClass: organizationalUnit
+ou: People
+
+dn: ou=Group,dc=cdac,dc=in
+objectClass: organizationalUnit
+ou: Group
+--------------------------------------------------
+
+[root@master ~]# ldapadd -x -D cn=Manager,dc=cdac,dc=in -W -f basedomain.ldif
+
+==================================================================================================
+    If Firewalld is running, allow LDAP service. LDAP uses 389/TCP.
+-----------------------------------------------------------------------
+[root@master ~]# firewall-cmd --add-service=ldap --permanent
+[root@master ~]# firewall-cmd --reload
+==================================================================================================
+
+====================================
+ On VM- Master
+====================================
+ OpenLDAP : OpenLDAP : Add User Accounts
+====================================
+
+[root@master ~]# cat /etc/passwd
+[root@master ~]# vi ldapuser.ldif
+-------------------------------------------------------
+dn: uid=hpcsa,ou=People,dc=cdac,dc=in
+objectClass: inetOrgPerson
+objectClass: posixAccount
+objectClass: shadowAccount
+cn: hpcsa
+sn: Linux
+userPassword: {SSHA}P0OzwYC7JFOpwoHJPvoV0NR+rkvhuFXj
+loginShell: /bin/bash
+uidNumber: 1100
+gidNumber: 1100
+homeDirectory: /home/hpcsa
+
+dn: cn=hpcsa,ou=Group,dc=cdac,dc=in
+objectClass: posixGroup
+cn: hpcsa
+gidNumber: 1100
+memberUid: hpcsa
+-------------------------------------------------------
+
+[root@master ~]# ldapadd -x -D cn=Manager,dc=cdac,dc=in -W -f ldapuser.ldif
+
+
+
+
+
+======================================================================================
+======================================================================================
+
+====================================
+  On VM- Client
+====================================
+OpenLDAP : Configure LDAP Client
+====================================
+
+[root@localhost ~]# hostnamectl set-hostname master
+[root@localhost ~]# systemctl stop firewalld
+[root@localhost ~]# systemctl disable firewalld
+[root@localhost ~]# vim /etc/selinux/config
+                    ------------------------
+                         selinux=disabled
+                    ------------------------
+                          ADD THIS LINE 
+                    ------------------------
+
+[root@localhost ~]# vi /etc/hosts
+                    -------------------------------
+                    192.168.235.136 master
+			  192.168.235.137 client
+                    -------------------------------
+[root@localhost ~]# ping master
+-------------------------------------------------------------------------------
+[root@client ~]# yum -y install openldap-clients nss-pam-ldapd
+[root@client ~]# authconfig --enableldap --enableldapauth --ldapserver=master --ldapbasedn="dc=cdac,dc=in" --enablemkhomedir --update
+[root@client ~]# systemctl restart nslcd
+[root@client ~]# ldapsearch -x
+[root@client ~]# cat /etc/nslcd.conf
+[root@client ~]# cat /etc/nsswitch.conf
+[root@client ~]# getent passwd
+[root@client ~]# ssh hpcsa@client
+
+
